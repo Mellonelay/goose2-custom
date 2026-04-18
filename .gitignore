@@ -88,3 +88,5 @@ gooseselftest/
 target-arm64-minimal-j1/
 *.txt
 *.csv
+
+documentation/
