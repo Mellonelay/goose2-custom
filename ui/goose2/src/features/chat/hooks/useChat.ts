@@ -54,7 +54,9 @@ function markMessageStopped(sessionId: string, messageId: string) {
   useChatStore.getState().updateMessage(sessionId, messageId, (message) => {
     if (
       message.metadata?.completionStatus === "completed" ||
+      message.metadata?.messageState === "completed" ||
       message.metadata?.completionStatus === "error" ||
+      message.metadata?.messageState === "failed" ||
       message.metadata?.completionStatus === "stopped"
     ) {
       return message;
@@ -64,6 +66,7 @@ function markMessageStopped(sessionId: string, messageId: string) {
       ...message,
       metadata: {
         ...message.metadata,
+        messageState: "partial",
         completionStatus: "stopped",
       },
       content: message.content.map((block) =>
@@ -296,6 +299,7 @@ export function useChat(
                 ...message,
                 metadata: {
                   ...message.metadata,
+                  messageState: "failed",
                   completionStatus: "error",
                 },
               }),

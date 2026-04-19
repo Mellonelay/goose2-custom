@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { useChatStore } from "@/features/chat/stores/chatStore";
 import { useChatSessionStore } from "@/features/chat/stores/chatSessionStore";
 import {
   applySessionConfigOptions,
+  clearActiveMessageId,
+  clearMessageTracking,
+  completeActiveMessage,
   handleSessionNotification,
+  setActiveMessageId,
 } from "../acpNotificationHandler";
 import { registerSession } from "../acpSessionTracker";
 
@@ -18,8 +23,23 @@ function resetSessionStore() {
   });
 }
 
+function resetChatStore() {
+  useChatStore.setState({
+    messagesBySession: {},
+    sessionStateById: {},
+    queuedMessageBySession: {},
+    draftsBySession: {},
+    activeSessionId: null,
+    isConnected: false,
+    loadingSessionIds: new Set(),
+    scrollTargetMessageBySession: {},
+  });
+  clearMessageTracking();
+}
+
 describe("applySessionConfigOptions", () => {
   beforeEach(() => {
+    resetChatStore();
     resetSessionStore();
     window.localStorage.clear();
   });
@@ -131,6 +151,7 @@ describe("applySessionConfigOptions", () => {
 
 describe("handleSessionNotification config fallback", () => {
   beforeEach(() => {
+    resetChatStore();
     resetSessionStore();
     window.localStorage.clear();
   });
@@ -179,5 +200,59 @@ describe("handleSessionNotification config fallback", () => {
     expect(updated?.providerId).toBe("google_gemini");
     expect(updated?.modelId).toBe("gemini-2.5-pro");
     expect(updated?.modelName).toBe("Gemini 2.5 Pro");
+  });
+});
+
+describe("handleSessionNotification message lifecycle", () => {
+  beforeEach(() => {
+    resetChatStore();
+    resetSessionStore();
+    window.localStorage.clear();
+  });
+
+  it("keeps a live assistant message streaming until ACP completion is confirmed", async () => {
+    const sessionId = "local-message-lifecycle";
+    const gooseSessionId = "goose-message-lifecycle";
+    registerSession(sessionId, gooseSessionId, "goose", "C:\\src\\goose");
+    setActiveMessageId(gooseSessionId, "assistant-message-1");
+
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "hello" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+
+    let message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    expect(message?.metadata?.messageState).toBe("streaming");
+    expect(message?.metadata?.completionStatus).toBe("inProgress");
+
+    completeActiveMessage(gooseSessionId);
+
+    message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    expect(message?.metadata?.messageState).toBe("completed");
+    expect(message?.metadata?.completionStatus).toBe("completed");
+  });
+
+  it("marks a tracked live assistant message partial when ACP completion is absent", async () => {
+    const sessionId = "local-message-partial";
+    const gooseSessionId = "goose-message-partial";
+    registerSession(sessionId, gooseSessionId, "goose", "C:\\src\\goose");
+    setActiveMessageId(gooseSessionId, "assistant-message-2");
+
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "hello" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+
+    clearActiveMessageId(gooseSessionId);
+
+    const message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    expect(message?.metadata?.messageState).toBe("partial");
+    expect(message?.metadata?.completionStatus).toBe("inProgress");
   });
 });

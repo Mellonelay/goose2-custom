@@ -59,6 +59,8 @@ export type MessageCompletionStatus =
   | "error"
   | "stopped";
 
+export type MessageState = "streaming" | "partial" | "completed" | "failed";
+
 export interface ToolRequestContent {
   type: "toolRequest";
   id: string;
@@ -140,6 +142,7 @@ export interface MessageMetadata {
   personaId?: string;
   personaName?: string;
   providerId?: string;
+  messageState?: MessageState;
   /** Which persona this user message is addressed to. */
   targetPersonaId?: string;
   targetPersonaName?: string;
