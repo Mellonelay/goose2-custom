@@ -20,6 +20,7 @@ import { perfLog } from "@/shared/lib/perfLog";
 
 // Pre-set message ID for the next live stream per goose session
 const presetMessageIds = new Map<string, string>();
+const lastLiveTextChunkByMessage = new Map<string, string>();
 
 // Per-session perf counters for replay/live streaming.
 interface ReplayPerf {
@@ -60,6 +61,12 @@ type ConfigSelectOption = {
   };
 };
 
+/**
+ * Registers a preset streaming message ID for a live (goose) session and initializes live-stream performance tracking.
+ *
+ * @param gooseSessionId - The identifier for the goose/live session
+ * @param messageId - The message ID to mark as the active streaming message for the session
+ */
 export function setActiveMessageId(
   gooseSessionId: string,
   messageId: string,
@@ -72,7 +79,22 @@ export function setActiveMessageId(
   });
 }
 
+/**
+ * Clears the active streaming message for a goose session and finalizes related tracking.
+ *
+ * Removes the preset message ID and its per-session duplicate-chunk tracking entry (if any),
+ * marks the active message as partial, and clears the preset from session state.
+ * If live performance data exists for the session, logs stream performance (first-byte latency, total duration, and chunk count)
+ * and removes that performance entry.
+ *
+ * @param gooseSessionId - The goose session identifier whose active message and tracking should be cleared
+ */
 export function clearActiveMessageId(gooseSessionId: string): void {
+  const messageId = presetMessageIds.get(gooseSessionId);
+  if (messageId) {
+    const sessionId = getLocalSessionId(gooseSessionId) ?? gooseSessionId;
+    lastLiveTextChunkByMessage.delete(`${sessionId}:${messageId}`);
+  }
   markActiveMessagePartial(gooseSessionId);
   presetMessageIds.delete(gooseSessionId);
   const perf = livePerf.get(gooseSessionId);
@@ -98,6 +120,18 @@ function markActiveMessagePartial(gooseSessionId: string): void {
   updateActiveMessageState(gooseSessionId, "partial");
 }
 
+/**
+ * Update the active streaming message's state for the given goose session.
+ *
+ * Sets the message's `metadata.messageState` to `messageState`. If `messageState`
+ * is `"completed"`, also sets `metadata.completionStatus` to `"completed"`.
+ * This is a no-op if there is no preset active message for the goose session,
+ * if the message cannot be found, if the message is already in a terminal
+ * state, or if the message is not currently marked as `"streaming"`.
+ *
+ * @param gooseSessionId - The external goose session identifier used to locate the preset message
+ * @param messageState - The new message state to apply (e.g., `"completed"`, `"partial"`)
+ */
 function updateActiveMessageState(
   gooseSessionId: string,
   messageState: MessageState,
@@ -131,10 +165,24 @@ function updateActiveMessageState(
   }));
 }
 
-function isTerminalMessageState(metadata: { messageState?: MessageState; completionStatus?: string } | undefined) {
+/**
+ * Determine whether the provided message metadata represents a terminal state.
+ *
+ * @param metadata - Message metadata object that may include `messageState` and/or `completionStatus`; may be `undefined`.
+ * @returns `true` if `messageState` is `"completed"` or `"failed"`, or if `completionStatus` is `"completed"`, `"error"`, or `"stopped"`, `false` otherwise.
+ */
+function isTerminalMessageState(
+  metadata:
+    | { messageState?: MessageState; completionStatus?: string }
+    | undefined,
+) {
   if (!metadata) return false;
-  const terminalMessageStates = metadata.messageState === "completed" || metadata.messageState === "failed";
-  const terminalCompletionStatus = metadata.completionStatus === "completed" || metadata.completionStatus === "error" || metadata.completionStatus === "stopped";
+  const terminalMessageStates =
+    metadata.messageState === "completed" || metadata.messageState === "failed";
+  const terminalCompletionStatus =
+    metadata.completionStatus === "completed" ||
+    metadata.completionStatus === "error" ||
+    metadata.completionStatus === "stopped";
   return terminalMessageStates || terminalCompletionStatus;
 }
 
@@ -310,6 +358,21 @@ function handleReplay(sessionId: string, update: SessionUpdate): void {
   }
 }
 
+/**
+ * Process a live session update and apply it to the chat store (create or update the streaming message, append text/tool blocks, and update streaming state).
+ *
+ * Handles these update kinds:
+ * - `agent_message_chunk`: ensures a streaming assistant message exists (using `update.messageId`, a preset id for the goose session, or a new id), deduplicates identical consecutive text chunks for the same session/message, and appends or concatenates text into the trailing text block of the streaming message. If the message is in a terminal state, the update is ignored.
+ * - `tool_call`: appends a `toolRequest` block with `status: "executing"` to the current streaming message.
+ * - `tool_call_update`: updates the matching `toolRequest` name (if provided), marks it completed on finished/failed updates, extracts tool output as a `toolResponse` block, and appends that response.
+ * - `session_info_update` / `config_option_update` / `usage_update`: delegated to shared handlers.
+ *
+ * Side effects: may add or modify messages in the store, set the session's streaming message id, update pending assistant provider, and record last-seen live text chunks to prevent duplicate processing.
+ *
+ * @param sessionId - The local session id used by the chat store.
+ * @param gooseSessionId - The external/goose session id used to look up any preset message id for live streaming.
+ * @param update - The incoming session update to process.
+ */
 function handleLive(
   sessionId: string,
   gooseSessionId: string,
@@ -349,8 +412,31 @@ function handleLive(
       }
 
       if (update.content.type === "text" && "text" in update.content) {
+        const text = update.content.text;
+        const chunkKey = `${sessionId}:${messageId}`;
+        if (lastLiveTextChunkByMessage.get(chunkKey) === text) {
+          break;
+        }
+        lastLiveTextChunkByMessage.set(chunkKey, text);
         store.setStreamingMessageId(sessionId, messageId);
-        store.updateStreamingText(sessionId, update.content.text);
+        store.updateMessage(sessionId, messageId, (msg) => {
+          if (isTerminalMessageState(msg.metadata)) {
+            return msg;
+          }
+          const lastContent = msg.content[msg.content.length - 1];
+          if (lastContent?.type !== "text") {
+            return {
+              ...msg,
+              content: [...msg.content, { type: "text" as const, text }],
+            };
+          }
+          const content = [...msg.content];
+          content[content.length - 1] = {
+            type: "text" as const,
+            text: lastContent.text + text,
+          };
+          return { ...msg, content };
+        });
       }
       break;
     }
@@ -614,8 +700,14 @@ function extractToolResultText(update: {
   return "";
 }
 
+/**
+ * Resets in-memory tracking for active live/replay messages.
+ *
+ * Clears the stored preset message IDs for goose sessions and the last-seen live text chunk cache used to deduplicate streaming chunks.
+ */
 export function clearMessageTracking(): void {
   presetMessageIds.clear();
+  lastLiveTextChunkByMessage.clear();
 }
 
 const handler: AcpNotificationHandler = {
