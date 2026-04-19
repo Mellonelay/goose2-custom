@@ -112,7 +112,7 @@ function updateActiveMessageState(
   );
   if (
     !message ||
-    isTerminalMessageState(message.metadata?.messageState) ||
+    isTerminalMessageState(message.metadata) ||
     message.metadata?.messageState !== "streaming"
   ) {
     return;
@@ -131,8 +131,11 @@ function updateActiveMessageState(
   }));
 }
 
-function isTerminalMessageState(messageState: MessageState | undefined) {
-  return messageState === "completed" || messageState === "failed";
+function isTerminalMessageState(metadata: { messageState?: MessageState; completionStatus?: string } | undefined) {
+  if (!metadata) return false;
+  const terminalMessageStates = metadata.messageState === "completed" || metadata.messageState === "failed";
+  const terminalCompletionStatus = metadata.completionStatus === "completed" || metadata.completionStatus === "error" || metadata.completionStatus === "stopped";
+  return terminalMessageStates || terminalCompletionStatus;
 }
 
 export async function handleSessionNotification(
@@ -324,7 +327,7 @@ function handleLive(
         (m) => m.id === messageId,
       );
 
-      if (isTerminalMessageState(existing?.metadata?.messageState)) {
+      if (isTerminalMessageState(existing?.metadata)) {
         break;
       }
 

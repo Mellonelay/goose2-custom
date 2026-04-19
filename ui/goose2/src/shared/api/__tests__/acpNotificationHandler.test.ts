@@ -325,4 +325,38 @@ describe("handleSessionNotification message lifecycle", () => {
     expect(message?.content).toEqual([{ type: "text", text: "failed" }]);
     expect(runtime.streamingMessageId).toBeNull();
   });
+
+  it("does not mutate a message with terminal completionStatus", async () => {
+    const sessionId = "local-message-terminal-completion";
+    const gooseSessionId = "goose-message-terminal-completion";
+    registerSession(sessionId, gooseSessionId, "goose", "C:\\src\\goose");
+    useChatStore.getState().addMessage(sessionId, {
+      id: "assistant-message-5",
+      role: "assistant",
+      created: Date.now(),
+      content: [{ type: "text", text: "original content" }],
+      metadata: {
+        userVisible: true,
+        agentVisible: true,
+        messageState: "streaming",
+        completionStatus: "completed",
+      },
+    });
+    setActiveMessageId(gooseSessionId, "assistant-message-5");
+
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " late chunk" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+    clearActiveMessageId(gooseSessionId);
+
+    const message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    const runtime = useChatStore.getState().getSessionRuntime(sessionId);
+    expect(message?.metadata?.completionStatus).toBe("completed");
+    expect(message?.content).toEqual([{ type: "text", text: "original content" }]);
+    expect(runtime.streamingMessageId).toBeNull();
+  });
 });
