@@ -256,6 +256,57 @@ describe("handleSessionNotification message lifecycle", () => {
     expect(message?.metadata?.completionStatus).toBe("inProgress");
   });
 
+  it("does not append a duplicate live text chunk for the same ACP message id", async () => {
+    const sessionId = "local-message-duplicate-chunk";
+    const gooseSessionId = "goose-message-duplicate-chunk";
+    registerSession(sessionId, gooseSessionId, "goose", "C:\\src\\goose");
+    setActiveMessageId(gooseSessionId, "assistant-message-duplicate");
+
+    const notification = {
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "assistant-message-duplicate",
+        content: { type: "text", text: "hello" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0];
+
+    await handleSessionNotification(notification);
+    await handleSessionNotification(notification);
+
+    const message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    expect(message?.content).toEqual([{ type: "text", text: "hello" }]);
+    expect(message?.metadata?.messageState).toBe("streaming");
+  });
+
+  it("keeps distinct live text chunks for the same ACP message id in order", async () => {
+    const sessionId = "local-message-distinct-chunks";
+    const gooseSessionId = "goose-message-distinct-chunks";
+    registerSession(sessionId, gooseSessionId, "goose", "C:\\src\\goose");
+    setActiveMessageId(gooseSessionId, "assistant-message-distinct");
+
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "assistant-message-distinct",
+        content: { type: "text", text: "hel" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "assistant-message-distinct",
+        content: { type: "text", text: "lo" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+
+    const message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    expect(message?.content).toEqual([{ type: "text", text: "hello" }]);
+    expect(message?.metadata?.messageState).toBe("streaming");
+  });
+
   it("does not transition a completed message back to streaming", async () => {
     const sessionId = "local-message-completed";
     const gooseSessionId = "goose-message-completed";
@@ -357,7 +408,9 @@ describe("handleSessionNotification message lifecycle", () => {
     const runtime = useChatStore.getState().getSessionRuntime(sessionId);
     expect(message?.metadata?.messageState).toBe("streaming");
     expect(message?.metadata?.completionStatus).toBe("completed");
-    expect(message?.content).toEqual([{ type: "text", text: "original content" }]);
+    expect(message?.content).toEqual([
+      { type: "text", text: "original content" },
+    ]);
     expect(runtime.streamingMessageId).toBeNull();
   });
 });

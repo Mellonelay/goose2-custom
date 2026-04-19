@@ -20,6 +20,7 @@ import { perfLog } from "@/shared/lib/perfLog";
 
 // Pre-set message ID for the next live stream per goose session
 const presetMessageIds = new Map<string, string>();
+const lastLiveTextChunkByMessage = new Map<string, string>();
 
 // Per-session perf counters for replay/live streaming.
 interface ReplayPerf {
@@ -73,6 +74,11 @@ export function setActiveMessageId(
 }
 
 export function clearActiveMessageId(gooseSessionId: string): void {
+  const messageId = presetMessageIds.get(gooseSessionId);
+  if (messageId) {
+    const sessionId = getLocalSessionId(gooseSessionId) ?? gooseSessionId;
+    lastLiveTextChunkByMessage.delete(`${sessionId}:${messageId}`);
+  }
   markActiveMessagePartial(gooseSessionId);
   presetMessageIds.delete(gooseSessionId);
   const perf = livePerf.get(gooseSessionId);
@@ -131,10 +137,18 @@ function updateActiveMessageState(
   }));
 }
 
-function isTerminalMessageState(metadata: { messageState?: MessageState; completionStatus?: string } | undefined) {
+function isTerminalMessageState(
+  metadata:
+    | { messageState?: MessageState; completionStatus?: string }
+    | undefined,
+) {
   if (!metadata) return false;
-  const terminalMessageStates = metadata.messageState === "completed" || metadata.messageState === "failed";
-  const terminalCompletionStatus = metadata.completionStatus === "completed" || metadata.completionStatus === "error" || metadata.completionStatus === "stopped";
+  const terminalMessageStates =
+    metadata.messageState === "completed" || metadata.messageState === "failed";
+  const terminalCompletionStatus =
+    metadata.completionStatus === "completed" ||
+    metadata.completionStatus === "error" ||
+    metadata.completionStatus === "stopped";
   return terminalMessageStates || terminalCompletionStatus;
 }
 
@@ -349,8 +363,31 @@ function handleLive(
       }
 
       if (update.content.type === "text" && "text" in update.content) {
+        const text = update.content.text;
+        const chunkKey = `${sessionId}:${messageId}`;
+        if (lastLiveTextChunkByMessage.get(chunkKey) === text) {
+          break;
+        }
+        lastLiveTextChunkByMessage.set(chunkKey, text);
         store.setStreamingMessageId(sessionId, messageId);
-        store.updateStreamingText(sessionId, update.content.text);
+        store.updateMessage(sessionId, messageId, (msg) => {
+          if (isTerminalMessageState(msg.metadata)) {
+            return msg;
+          }
+          const lastContent = msg.content[msg.content.length - 1];
+          if (lastContent?.type !== "text") {
+            return {
+              ...msg,
+              content: [...msg.content, { type: "text" as const, text }],
+            };
+          }
+          const content = [...msg.content];
+          content[content.length - 1] = {
+            type: "text" as const,
+            text: lastContent.text + text,
+          };
+          return { ...msg, content };
+        });
       }
       break;
     }
@@ -616,6 +653,7 @@ function extractToolResultText(update: {
 
 export function clearMessageTracking(): void {
   presetMessageIds.clear();
+  lastLiveTextChunkByMessage.clear();
 }
 
 const handler: AcpNotificationHandler = {
