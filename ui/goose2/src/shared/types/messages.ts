@@ -59,6 +59,8 @@ export type MessageCompletionStatus =
   | "error"
   | "stopped";
 
+export type MessageState = "streaming" | "partial" | "completed" | "failed";
+
 export interface ToolRequestContent {
   type: "toolRequest";
   id: string;
@@ -140,6 +142,19 @@ export interface MessageMetadata {
   personaId?: string;
   personaName?: string;
   providerId?: string;
+  /**
+   * ACP-driven message lifecycle state (authoritative).
+   * This is the primary lifecycle signal that callers should read and update in new code.
+   * `messageState` tracks the current state of message processing (streaming, partial, completed, failed).
+   *
+   * The `completionStatus` property is a legacy/derived indicator kept for compatibility.
+   * When updating message state, prefer setting `messageState` directly. The `completionStatus`
+   * should be synchronized to maintain compatibility with existing code that relies on it.
+   *
+   * @see messageState - The authoritative ACP-driven lifecycle state
+   * @see completionStatus - Legacy derived indicator for backward compatibility
+   */
+  messageState?: MessageState;
   /** Which persona this user message is addressed to. */
   targetPersonaId?: string;
   targetPersonaName?: string;

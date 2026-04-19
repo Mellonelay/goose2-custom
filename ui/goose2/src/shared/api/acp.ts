@@ -4,6 +4,7 @@ import * as sessionTracker from "./acpSessionTracker";
 import {
   setActiveMessageId,
   clearActiveMessageId,
+  completeActiveMessage,
   applySessionConfigOptions,
 } from "./acpNotificationHandler";
 import { searchSessionsViaExports } from "./sessionSearch";
@@ -65,13 +66,16 @@ export async function acpSendMessage(
     `[perf:send] ${sid} acpSendMessage → prompt(len=${prompt.length}, imgs=${images?.length ?? 0})`,
   );
   const tPrompt = performance.now();
-  await directAcp.prompt(gooseSessionId, content);
-  const tDone = performance.now();
-  perfLog(
-    `[perf:send] ${sid} prompt() resolved in ${(tDone - tPrompt).toFixed(1)}ms (total acpSendMessage ${(tDone - tStart).toFixed(1)}ms)`,
-  );
-
-  clearActiveMessageId(gooseSessionId);
+  try {
+    await directAcp.prompt(gooseSessionId, content);
+    const tDone = performance.now();
+    completeActiveMessage(gooseSessionId);
+    perfLog(
+      `[perf:send] ${sid} prompt() resolved in ${(tDone - tPrompt).toFixed(1)}ms (total acpSendMessage ${(tDone - tStart).toFixed(1)}ms)`,
+    );
+  } finally {
+    clearActiveMessageId(gooseSessionId);
+  }
 }
 
 /** Prepare or warm an ACP session ahead of the first prompt. */

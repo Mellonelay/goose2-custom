@@ -10,6 +10,7 @@ import {
   findLatestUnpairedToolRequest,
 } from "@/features/chat/hooks/replayBuffer";
 import type {
+  MessageState,
   ToolRequestContent,
   ToolResponseContent,
 } from "@/shared/types/messages";
@@ -72,6 +73,7 @@ export function setActiveMessageId(
 }
 
 export function clearActiveMessageId(gooseSessionId: string): void {
+  markActiveMessagePartial(gooseSessionId);
   presetMessageIds.delete(gooseSessionId);
   const perf = livePerf.get(gooseSessionId);
   if (perf) {
@@ -86,6 +88,41 @@ export function clearActiveMessageId(gooseSessionId: string): void {
     );
     livePerf.delete(gooseSessionId);
   }
+}
+
+export function completeActiveMessage(gooseSessionId: string): void {
+  updateActiveMessageState(gooseSessionId, "completed");
+}
+
+function markActiveMessagePartial(gooseSessionId: string): void {
+  updateActiveMessageState(gooseSessionId, "partial");
+}
+
+function updateActiveMessageState(
+  gooseSessionId: string,
+  messageState: MessageState,
+): void {
+  const messageId = presetMessageIds.get(gooseSessionId);
+  if (!messageId) return;
+
+  const sessionId = getLocalSessionId(gooseSessionId) ?? gooseSessionId;
+  const store = useChatStore.getState();
+  const message = store.messagesBySession[sessionId]?.find(
+    (m) => m.id === messageId,
+  );
+  if (!message || message.metadata?.messageState !== "streaming") return;
+
+  store.updateMessage(sessionId, messageId, (msg) => ({
+    ...msg,
+    metadata: {
+      ...msg.metadata,
+      messageState,
+      completionStatus:
+        messageState === "completed"
+          ? "completed"
+          : msg.metadata?.completionStatus,
+    },
+  }));
 }
 
 export async function handleSessionNotification(
@@ -286,6 +323,7 @@ function handleLive(
           metadata: {
             userVisible: true,
             agentVisible: true,
+            messageState: "streaming",
             completionStatus: "inProgress",
           },
         });
