@@ -110,7 +110,13 @@ function updateActiveMessageState(
   const message = store.messagesBySession[sessionId]?.find(
     (m) => m.id === messageId,
   );
-  if (!message || message.metadata?.messageState !== "streaming") return;
+  if (
+    !message ||
+    isTerminalMessageState(message.metadata?.messageState) ||
+    message.metadata?.messageState !== "streaming"
+  ) {
+    return;
+  }
 
   store.updateMessage(sessionId, messageId, (msg) => ({
     ...msg,
@@ -123,6 +129,10 @@ function updateActiveMessageState(
           : msg.metadata?.completionStatus,
     },
   }));
+}
+
+function isTerminalMessageState(messageState: MessageState | undefined) {
+  return messageState === "completed" || messageState === "failed";
 }
 
 export async function handleSessionNotification(
@@ -313,6 +323,10 @@ function handleLive(
       const existing = store.messagesBySession[sessionId]?.find(
         (m) => m.id === messageId,
       );
+
+      if (isTerminalMessageState(existing?.metadata?.messageState)) {
+        break;
+      }
 
       if (!existing) {
         store.addMessage(sessionId, {
