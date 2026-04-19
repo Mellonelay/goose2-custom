@@ -355,6 +355,7 @@ describe("handleSessionNotification message lifecycle", () => {
 
     const message = useChatStore.getState().messagesBySession[sessionId]?.[0];
     const runtime = useChatStore.getState().getSessionRuntime(sessionId);
+    expect(message?.metadata?.messageState).toBe("streaming");
     expect(message?.metadata?.completionStatus).toBe("completed");
     expect(message?.content).toEqual([{ type: "text", text: "original content" }]);
     expect(runtime.streamingMessageId).toBeNull();
