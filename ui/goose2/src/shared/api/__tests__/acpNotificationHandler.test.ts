@@ -255,4 +255,109 @@ describe("handleSessionNotification message lifecycle", () => {
     expect(message?.metadata?.messageState).toBe("partial");
     expect(message?.metadata?.completionStatus).toBe("inProgress");
   });
+
+  it("does not transition a completed message back to streaming", async () => {
+    const sessionId = "local-message-completed";
+    const gooseSessionId = "goose-message-completed";
+    registerSession(sessionId, gooseSessionId, "goose", "C:\\src\\goose");
+    setActiveMessageId(gooseSessionId, "assistant-message-3");
+
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "hello" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+    completeActiveMessage(gooseSessionId);
+    clearActiveMessageId(gooseSessionId);
+    useChatStore.getState().setStreamingMessageId(sessionId, null);
+
+    setActiveMessageId(gooseSessionId, "assistant-message-3");
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " late" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+    clearActiveMessageId(gooseSessionId);
+
+    const message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    const runtime = useChatStore.getState().getSessionRuntime(sessionId);
+    expect(message?.metadata?.messageState).toBe("completed");
+    expect(message?.metadata?.completionStatus).toBe("completed");
+    expect(message?.content).toEqual([{ type: "text", text: "hello" }]);
+    expect(runtime.streamingMessageId).toBeNull();
+  });
+
+  it("does not transition a failed message back to streaming or partial", async () => {
+    const sessionId = "local-message-failed";
+    const gooseSessionId = "goose-message-failed";
+    registerSession(sessionId, gooseSessionId, "goose", "C:\\src\\goose");
+    useChatStore.getState().addMessage(sessionId, {
+      id: "assistant-message-4",
+      role: "assistant",
+      created: Date.now(),
+      content: [{ type: "text", text: "failed" }],
+      metadata: {
+        userVisible: true,
+        agentVisible: true,
+        messageState: "failed",
+        completionStatus: "error",
+      },
+    });
+    setActiveMessageId(gooseSessionId, "assistant-message-4");
+
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " late" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+    clearActiveMessageId(gooseSessionId);
+
+    const message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    const runtime = useChatStore.getState().getSessionRuntime(sessionId);
+    expect(message?.metadata?.messageState).toBe("failed");
+    expect(message?.metadata?.completionStatus).toBe("error");
+    expect(message?.content).toEqual([{ type: "text", text: "failed" }]);
+    expect(runtime.streamingMessageId).toBeNull();
+  });
+
+  it("does not mutate a message with terminal completionStatus", async () => {
+    const sessionId = "local-message-terminal-completion";
+    const gooseSessionId = "goose-message-terminal-completion";
+    registerSession(sessionId, gooseSessionId, "goose", "C:\\src\\goose");
+    useChatStore.getState().addMessage(sessionId, {
+      id: "assistant-message-5",
+      role: "assistant",
+      created: Date.now(),
+      content: [{ type: "text", text: "original content" }],
+      metadata: {
+        userVisible: true,
+        agentVisible: true,
+        messageState: "streaming",
+        completionStatus: "completed",
+      },
+    });
+    setActiveMessageId(gooseSessionId, "assistant-message-5");
+
+    await handleSessionNotification({
+      sessionId: gooseSessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " late chunk" },
+      },
+    } as unknown as Parameters<typeof handleSessionNotification>[0]);
+    clearActiveMessageId(gooseSessionId);
+
+    const message = useChatStore.getState().messagesBySession[sessionId]?.[0];
+    const runtime = useChatStore.getState().getSessionRuntime(sessionId);
+    expect(message?.metadata?.messageState).toBe("streaming");
+    expect(message?.metadata?.completionStatus).toBe("completed");
+    expect(message?.content).toEqual([{ type: "text", text: "original content" }]);
+    expect(runtime.streamingMessageId).toBeNull();
+  });
 });
